@@ -104,8 +104,24 @@
   </head>
   <body>
     <div class="wrap">
-      <h1>Rocker / Bend measurement</h1>
-  
+      <h1>Rocker / Bend measuring tool</h1>
+      <h5>Version 1, by joerydev, november 2025</h5>
+        A tool to assist in measuring the rocker or bend of your shorttrack or speedskating blades,
+        without the need for expensive equipment such as the 350 Euro Marchese Rocker Gauge or similar. 
+        I intend to add a short description of how to measure the rocker or bend using nothing more fancy
+        than a sliding caliper soon.</br></br>
+        Measurements should be filled in in millimeters. I've assumed an inaccuracy of 0.05 mm. Also, I've
+        assumed that measurements are taken at regular intervals. By default, this is set to 20mm, but you
+        can specify a different interval if necessary.
+        The bottommost graph allows you compare your measurements, the smoothed version of those measurements, and the circle that best fits your measurements.
+      <h3>How to use</h3>
+        Fill in the measurements in the leftmost column below, one measurement per line, then press 'Calculate'.
+        Or press 'Fill example', then press 'Calculate', to see an example of a series of measurements I took from a shorttrack blade that I 
+        had recently had sharpened (which has a variable rocker).
+        Note that the inaccuracy of 0.05mm of a typical sliding caliper is quite signicant. However, I believe that by taking a sufficient number of measurements
+        and then smoothing the result, you can get a good enough idea of the curvature of your blade. For this reason I recommend using a measurement
+        interval of at most 20mm.
+      </br></br>
       <div class="card">
         <div class="row">
           <div>
@@ -113,21 +129,21 @@
             <input id="spacing" type="number" value="20" step="0.1">
           </div>
         </div>
-  
+        </br>
         <div class="triple-wrap">
 
             <div class="columns" id="columns">
                 <div class="col">
                     <div class="col-head">Measured</div>
-                    <textarea id="data" class="dataRow" spellcheck="false" placeholder="Voorbeeld:
-            0
-            0.3
-            0.7
-            1.0
-            0.8
-            0.4
-            0.1
-            0.0"></textarea>
+                    <textarea id="data" class="dataRow" spellcheck="false" placeholder="Example:
+0
+0.3
+0.7
+1.0
+0.8
+0.4
+0.1
+0.0"></textarea>
                 </div>
                 <div class="col">
                     <div class="col-head">Smoothed</div>
