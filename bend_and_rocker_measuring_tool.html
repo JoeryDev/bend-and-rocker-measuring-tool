@@ -1,0 +1,1029 @@
+  <!DOCTYPE html>
+  <html lang="nl">
+  <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ronding/Bend-meter – enkele grafiek met R-labels</title>
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --card: #121318;
+      --ink: #f2faf3;
+      --muted: #c69f9f;
+      --accent: #6ea8fe;
+      --grid: #1e2538;
+      --data-row-font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    }
+    .wrap { max-width: 1000px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 1.5rem; margin: 0 0 10px 0; }
+    h3 { margin-top: 15px; margin-bottom: 3px; }
+    .card { background: var(--card); border: 1px solid #1f2230; border-radius: 14px; padding: 16px; margin-bottom: 1px; }
+    label { display: block; font-weight: 600; margin: 8px 0 6px 0; }
+    input, textarea, button { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid #2a2e42; background: #0f1118; color: var(--ink); }
+    textarea { min-height: 140px; resize: vertical; white-space: pre; resize: none;}
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .row > * { flex: 1; }
+    .btn { background: var(--accent); color: #06122c; border: none; cursor: pointer; font-weight: 700; }
+    .hint { color: var(--muted); font-size: .92rem; }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; background: #0f1118; border: 1px solid #2a2e42; color: var(--muted); font-size: .86rem; }
+    canvas { width: 100%; height: 340px; background: #0f1118; border-radius: 10px; border: 1px solid #22273a; display: block; }
+    .error { color: #ff6b6b; }
+
+
+    /* Wrapper: neemt alle beschikbare hoogte in en is verticaal resizebaar */
+    .triple-wrap {
+        /* kies óf vaste viewporthoogte óf laat 'm de ouder vullen */
+        /* optie 1: vast in viewport */
+        /* height: 60vh; */
+
+        /* optie 2: vul ouder (als #app/body/html 100% hoog zijn) */
+        flex: 1 1 auto;
+
+        min-height: 240px;
+        display: flex;
+        flex-direction: column;
+        resize: vertical;
+        overflow: auto;
+
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 8px;
+    }
+
+    /* Toolbalk blijft bovenin, columns vullen de rest */
+    .toolbar { 
+        display: flex; gap: 12px; align-items: center; flex-wrap: wrap; 
+        margin-bottom: 6px;
+    }
+    .columns {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr 1fr;
+        gap: 8px;
+
+        /* vul resterende ruimte van triple-wrap */
+        flex: 1 1 auto;
+        min-height: 0;      /* <<< cruciaal in flex-ouders */
+    }
+
+    /* kolommen & textarea's moeten ook mogen krimpen en rekken */
+    .col { 
+        display: flex; flex-direction: column; 
+        min-width: 0; min-height: 0;           /* <<< cruciaal */
+    }
+    .col-head {
+        font-weight: 600; padding: 4px 0; margin-bottom: 4px;
+        border-bottom: 1px solid #e5e5e5; user-select: none;
+    }
+    .dataRow {
+        flex: 1 1 auto;
+        min-height: 0;      /* <<< anders blijft hij groter dan de kolom */
+        height: auto;       /* laat flex de hoogte bepalen */
+        width: 100%;
+        box-sizing: border-box;
+        white-space: pre;
+        overflow: auto;
+        tab-size: 4;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        background: #1d1d1d;
+        font: var(--data-row-font);
+        white-space: pre;
+        tab-size: 4;
+        line-height: 1.5;
+    }
+
+</style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Rocker / Bend measurement</h1>
+  
+      <div class="card">
+        <div class="row">
+          <div>
+            <label for="spacing">Interval Δ (mm)</label>
+            <input id="spacing" type="number" value="20" step="0.1">
+          </div>
+        </div>
+  
+        <div class="triple-wrap">
+
+            <div class="columns" id="columns">
+                <div class="col">
+                    <div class="col-head">Measured</div>
+                    <textarea id="data" class="dataRow" spellcheck="false" placeholder="Voorbeeld:
+            0
+            0.3
+            0.7
+            1.0
+            0.8
+            0.4
+            0.1
+            0.0"></textarea>
+                </div>
+                <div class="col">
+                    <div class="col-head">Smoothed</div>
+                    <textarea id="taSmoothed" class="dataRow" spellcheck="false" readonly></textarea>
+                </div>
+                <div class="col">
+                    <div class="col-head">Best fitting circle</div>
+                    <textarea id="taBestFittingCircle" class="dataRow" spellcheck="false" readonly></textarea>
+                </div>
+                <div class="col">
+                    <div class="col-head" id="labelDiff">Difference</div>
+                    <div id="taDiff" class="dataRow"></div>
+                </div>
+            </div>
+        </div>
+        <p id="msg" class="error"></p>
+      </div>
+  
+        <div class="row" style="align-items: center">
+          <button class="btn" id="run">Calculate</button>
+          <button id="demo">Fill example</button>
+          <div class="pill" id="summary">–</div>
+        </div>
+  
+      <div class="card">
+        <h3>Measured blade heights with radii</h3>
+        <canvas id="plotY" width="900" height="340"></canvas>
+        <h3>Smoothed blade heights and radii</h3>
+        <canvas id="plotSmooth" width="900" height="340"></canvas>
+        <h3 id="labelBestFittingCircle">Best fitting circle</h3>
+        <canvas id="plotArc" width="900" height="340"></canvas>
+        <div style="margin-top: 15px; margin-bottom: 3px;">
+            <h3 style="display:inline;">Difference in mm: </h3>
+            <select style="display:inline;" id="select1"></select>
+            <h3 style="display:inline;">minus</h3>
+            <select style="display:inline;" id="select2"></select>
+        </div>
+        <canvas id="plotDiff" width="900" height="340"></canvas>
+      </div>
+    </div>
+  
+  <script>
+    function el(id){ return document.getElementById(id); }
+    const spacingEl = el('spacing');
+    const dataEl = el('data');
+    const runBtn = el('run');
+    const demoBtn = el('demo');
+    const msgEl = el('msg');
+    const summaryEl = el('summary');
+    const labelBestFittingCircle = el('labelBestFittingCircle');
+
+    const cY = el('plotY');
+    const cSmooth = el('plotSmooth');
+    const cArc = el('plotArc');
+    const cDiff = el('plotDiff');
+
+    const gY = cY.getContext('2d');
+    const gSmooth = cSmooth.getContext('2d');
+    const gArc = cArc.getContext('2d');
+    const gDiff = cDiff.getContext('2d');
+
+    const taData = el('taData');
+    const taSmoothed = el('taSmoothed');
+    const taDiff = el('taDiff');
+    const taBestFittingCircle = el('taBestFittingCircle');
+
+    const colorMeasurements = '#0080ff';
+    const colorSmoothed = '#00ff00';
+    const colorBestFittingCircle = '#ffff00';
+    const colorDifference = '#ffffff';
+    const colorLabels = '#ffffff';
+    //const colorPoints = '#00ffff';
+    
+    const select1 = document.getElementById("select1");
+    const select2 = document.getElementById("select2");
+    const optionMeasured="Measured";
+    const optionSmoothed = "Smoothed";
+    const optionBestFittingCircle = "Best Fitting Circle";
+    const options=[optionMeasured, optionSmoothed, optionBestFittingCircle];
+  
+    // ===== Scroll sync (single scrollbar: the master) =====
+    (function setupScrollSync() {
+        const master = document.getElementById('data');
+        const slaves = [document.getElementById('taSmoothed'), document.getElementById('taDiff'), document.getElementById('taBestFittingCircle')];
+        let syncing = false;
+
+        function syncFromMaster() {
+            if (syncing) return;
+            syncing = true;
+            const ratio = master.scrollTop / (master.scrollHeight - master.clientHeight || 1);
+            for (const el of slaves) {
+                el.scrollTop = ratio * (el.scrollHeight - el.clientHeight);
+            }
+            syncing = false;
+        }
+        master.addEventListener('scroll', syncFromMaster);
+
+        // Keep slave heights exactly matching master when wrapper resizes
+        const wrap = document.querySelector('.triple-wrap');
+        new ResizeObserver(() => {
+        // nudge scroll to re-sync after height changes
+            syncFromMaster();
+        }).observe(wrap);
+    });
+
+    (function setupScrollSync2() {
+        const synced = [document.getElementById('taSmoothed'), document.getElementById('taDiff'), document.getElementById('taBestFittingCircle'), document.getElementById('data')];
+        let syncing = false;
+
+        function sync(master) {
+            if (syncing) return;
+            syncing = true;
+            const ratio = master.scrollTop / (master.scrollHeight - master.clientHeight || 1);
+            for (const el of synced) {
+                if (el != master) {
+                  el.scrollTop = ratio * (el.scrollHeight - el.clientHeight);
+                }
+            }
+            syncing = false;
+        }
+
+        synced.forEach((x) => x.addEventListener('scroll', y => {
+          sync(x);
+        }));
+
+        // Keep slave heights exactly matching master when wrapper resizes
+        const wrap = document.querySelector('.triple-wrap');
+        new ResizeObserver(() => {
+        // nudge scroll to re-sync after height changes
+            sync(document.getElementById('data'));
+        }).observe(wrap);
+    })();
+
+    function parseHeights(raw) {
+      const lines = raw.split(new RegExp('\\n+')).map(s => s.trim()).filter(Boolean);
+      if (!lines.length) throw new Error('No measurements found.');
+      const h = lines.map(v => Number(v.replace(',', '.')) / 1000);
+      if (h.some(v => !Number.isFinite(v))) throw new Error('Invalid numbers.');
+      const dx = Number(spacing);
+      if (!(dx > 0)) throw new Error('Δ must be > 0.');
+      return h;
+    }
+  
+/* Savitzky–Golay smoothing + afgeleiden + (signed) curvature/radius
+   ---------------------------------------------------------------
+   Gebruik:
+     const h = 0.01;              // stap in meters (bv. 10 mm)
+     const z = [...];             // hoogtes in meters
+     const win =  nineOdd(9);     // venster (oneven, bv 7,9,11)
+     const poly = 3;              // polygraad (2 of 3 is praktisch)
+
+     const y  = savgolFilter(z, win, poly, 0, h);  // gesmoothte hoogte
+     const yp = savgolFilter(z, win, poly, 1, h);  // 1e afgeleide
+     const ypp= savgolFilter(z, win, poly, 2, h);  // 2e afgeleide
+
+     const { kappa, R } = curvatureAndRadiusSignedFromDerivs(yp, ypp);
+*/
+
+function nineOdd(n){ if(n%2===0||n<3) throw new Error("window must be odd ≥3"); return n; }
+function factorial(k){ let f=1; for(let i=2;i<=k;i++) f*=i; return f; }
+
+// --- Kleine matrix-hulpen (kleine dimensies: poly ≤ 5 is gebruikelijk) ---
+// function matMul(A,B){ // A[m×n], B[n×p] -> C[m×p]
+//   const m=A.length, n=A[0].length, p=B[0].length; const C=Array.from({length:m},()=>Array(p).fill(0));
+//   for(let i=0;i<m;i++) for(let k=0;k<n;k++){ const aik=A[i][k]; for(let j=0;j<p;j++) C[i][j]+=aik*B[k][j]; }
+//   return C;
+// }
+// function matVec(A,v){ const m=A.length, n=A[0].length; const out=new Array(m).fill(0);
+//   for(let i=0;i<m;i++){ let s=0; for(let j=0;j<n;j++) s+=A[i][j]*v[j]; out[i]=s; }
+//   return out;
+// }
+function vecDot(a,b){ let s=0; for(let i=0;i<a.length;i++) s+=a[i]*b[i]; return s; }
+function invertSymPosDef(M){ // eenvoudige Gauss-Jordan; klein (≤6×6)
+  const n=M.length; const A=Array.from({length:n},(_,i)=>M[i].slice()); const I=Array.from({length:n},(_,i)=>{const r=Array(n).fill(0); r[i]=1; return r;});
+  for(let k=0;k<n;k++){
+    // pivot
+    let piv=A[k][k]; if(Math.abs(piv)<1e-18) throw new Error("Matrix singular");
+    const inv=1/piv;
+    for(let j=0;j<n;j++){ A[k][j]*=inv; I[k][j]*=inv; }
+    for(let i=0;i<n;i++){
+      if(i===k) continue;
+      const f=A[i][k];
+      if(f!==0){
+        for(let j=0;j<n;j++){ A[i][j]-=f*A[k][j]; I[i][j]-=f*I[k][j]; }
+      }
+    }
+  }
+  return I;
+}
+
+// Cholesky-decompositie van een (bij benadering) SPD-matrix M.
+// Geeft L met M ≈ L L^T. Werkt met mini-ridge bij borderline gevallen.
+function cholesky(M, ridge = 0) {
+  const n = M.length;
+  const L = Array.from({length: n}, () => Array(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j <= i; j++) {
+      let sum = M[i][j];
+      for (let k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
+      if (i === j) {
+        const diag = sum + ridge;
+        if (!(diag > 0) || !isFinite(diag)) throw new Error("Cholesky: non-SPD matrix");
+        L[i][i] = Math.sqrt(diag);
+      } else {
+        L[i][j] = sum / L[j][j];
+      }
+    }
+  }
+  return L;
+}
+
+// Los M x = b op via Cholesky zonder M te inverteren.
+function cholSolve(M, b, ridge = 1e-12) {
+  const L = cholesky(M, ridge);
+  const n = M.length;
+  const y = new Array(n).fill(0);
+  const x = new Array(n).fill(0);
+  // forward: L y = b
+  for (let i = 0; i < n; i++) {
+    let s = b[i];
+    for (let k = 0; k < i; k++) s -= L[i][k] * y[k];
+    y[i] = s / L[i][i];
+  }
+  // back: L^T x = y
+  for (let i = n - 1; i >= 0; i--) {
+    let s = y[i];
+    for (let k = i + 1; k < n; k++) s -= L[k][i] * x[k];
+    x[i] = s / L[i][i];
+  }
+  return x;
+}
+
+// Matrix helpers
+function matMul(A,B){ const m=A.length,n=A[0].length,p=B[0].length;
+  const C=Array.from({length:m},()=>Array(p).fill(0));
+  for(let i=0;i<m;i++) for(let k=0;k<n;k++){ const aik=A[i][k];
+    for(let j=0;j<p;j++) C[i][j]+=aik*B[k][j];
+  } return C;
+}
+function matVec(A,v){ const m=A.length,n=A[0].length; const out=new Array(m).fill(0);
+  for(let i=0;i<m;i++){ let s=0; for(let j=0;j<n;j++) s+=A[i][j]*v[j]; out[i]=s; }
+  return out;
+}
+
+// ---------- SG-kernel via stabiele solve (geen inverse/NaN) ----------
+
+function savgolKernel(window, poly, deriv, delta) {
+  if (window % 2 === 0 || window < 3) throw new Error("window must be odd ≥ 3");
+  if (poly >= window) throw new Error("poly must be < window");
+  if (deriv < 0 || deriv > poly) throw new Error("deriv must be ≤ poly");
+  if (deriv > 0) {
+    if (!(delta > 0) || !isFinite(delta)) throw new Error("Positive delta (h) required for deriv > 0");
+  }
+  const half = (window - 1) / 2;
+
+  // Ontwerp matrix A[r,c] = i^c  voor i = -half..+half
+  const A = Array.from({ length: window }, (_, r) => {
+    const i = r - half; // integer als window oneven
+    const row = new Array(poly + 1);
+    let p = 1;
+    for (let c = 0; c <= poly; c++) { row[c] = p; p *= i; }
+    return row;
+  });
+
+  // ATA en rechterlid e (one-hot met factorial)
+  const AT = A[0].map((_, j) => A.map(row => row[j]));
+  const ATA = matMul(AT, A);
+  const e = new Array(poly + 1).fill(0);
+  // factorial(deriv): klein want deriv ≤ poly ≤ ~5
+  let fact = 1; for (let k = 2; k <= deriv; k++) fact *= k;
+  e[deriv] = fact;
+
+  // Los (A^T A) c = e  →  c = (A^T A)^{-1} e  (stabiel via Cholesky)
+  const c = cholSolve(ATA, e, 1e-12);
+
+  // Gewichten: w = A c   (Geen transposes/inverses met INF)
+  let w = matVec(A, c);
+
+  // Schaal voor afgeleiden: delta^deriv; voor deriv=0 schaal=1
+  const scale = (deriv === 0) ? 1 : Math.pow(delta, deriv);
+  w = w.map(v => v / scale);
+
+  // Sanity: bij deriv=0 zou som(w) ≈ 1 moeten zijn
+  // (kan je even loggen bij debuggen)
+  return w;
+}
+
+// ---------- Convolutie (reflectieranden) & filter ----------
+
+function convolveReflect(x, kernel){
+  const n=x.length, m=kernel.length, half=(m-1)/2;
+  const y=new Array(n).fill(0);
+  for(let i=0;i<n;i++){
+    let s=0;
+    for(let k=-half;k<=half;k++){
+      let j=i+k;
+      if(j<0) j=-j-1;
+      if(j>=n) j=2*n-j-1;
+      s += kernel[k+half]*x[j];
+    }
+    y[i]=s;
+  }
+  return y;
+}
+
+// --- Per-index SG-kernel met randcorrectie (asymmetrisch bij randen) ---
+function savgolKernelAtIndex(i, n, window, poly, deriv, delta) {
+  if (window % 2 === 0 || window < 3) throw new Error("window must be odd ≥ 3");
+  if (poly >= window) throw new Error("poly must be < window");
+  if (deriv < 0 || deriv > poly) throw new Error("deriv must be ≤ poly");
+  if (deriv > 0 && !(delta > 0)) throw new Error("Positive delta (h) required for deriv > 0");
+
+  const half = (window - 1) / 2;
+  // hoeveel punten links/rechts beschikbaar?
+  const left  = Math.min(half, i);
+  const right = Math.min(half, n - 1 - i);
+  const L = left + right + 1;
+
+  // Ontwerp-matrix A[r,c] = t^c, met offsets t ∈ {-left..right}
+  const A = Array.from({ length: L }, (_, r) => {
+    const t = r - left; // integer offset
+    const row = new Array(poly + 1);
+    let p = 1;
+    for (let c = 0; c <= poly; c++) { row[c] = p; p *= t; }
+    return row;
+  });
+
+  // Los (A^T A) c = e  (stabiel via Cholesky); e = factorial(deriv) * e_deriv
+  const AT = A[0].map((_, j) => A.map(row => row[j]));
+  const ATA = matMul(AT, A);
+  let fact = 1; for (let k = 2; k <= deriv; k++) fact *= k;
+  const e = new Array(poly + 1).fill(0); e[deriv] = fact;
+
+  const c = cholSolve(ATA, e, 1e-12);     // (poly+1)
+  let w = matVec(A, c);                   // lengte L
+
+  // schaal voor afgeleiden: delta^deriv (bij deriv=0 is dat 1)
+  const scale = (deriv === 0) ? 1 : Math.pow(delta, deriv);
+  w = w.map(v => v / scale);
+
+  return { w, left, right }; // kernel en hoeveel links/rechts wordt gebruikt
+}
+
+// --- SG-filter met randcorrectie: geen reflectie nodig ---
+function savgolFilterEdgeCorrected(x, window, poly, deriv = 0, delta /*=h*/) {
+  if (!Array.isArray(x) || x.length < window) throw new Error("input too short for window");
+  if (deriv > 0 && !(delta > 0)) throw new Error("delta (h) must be > 0 for deriv > 0");
+
+  const n = x.length;
+  const y = new Array(n);
+
+  for (let i = 0; i < n; i++) {
+    const { w, left, right } = savgolKernelAtIndex(i, n, window, poly, deriv, delta);
+    let s = 0;
+    for (let r = -left; r <= right; r++) {
+      s += w[r + left] * x[i + r];
+    }
+    y[i] = s;
+  }
+  return y;
+}
+
+function savgolFilter(x, window, poly, deriv=0, delta /*=h*/){
+  if (!Array.isArray(x) || x.length < window) throw new Error("input array too short");
+  if (deriv > 0 && !(delta > 0)) throw new Error("delta (h) must be > 0 for deriv > 0");
+  const ker = savgolKernel(window, poly, deriv, delta);
+  return convolveReflect(x, ker);
+}
+
+// --- Signed curvature & radius uit afgeleiden ---
+function curvatureAndRadiusSignedFromDerivs(yp, ypp, minKappa=1e-12, flipSign=false){
+  const n=yp.length, kappa=new Array(n), R=new Array(n);
+  for(let i=0;i<n;i++){
+    const denom = Math.pow(1 + yp[i]*yp[i], 1.5); // > 0
+    let kap = ypp[i] / Math.max(denom, 1e-18);
+    if (flipSign) kap = -kap;
+    if (Math.abs(kap) < minKappa){
+      kappa[i]=0;
+      R[i] = (kap>=0) ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+    } else {
+      kappa[i]=kap;
+      R[i]=1/kap;
+    }
+  }
+  return { kappa, R };
+}
+
+function applyD2(y, h) {
+  const n = y.length, out = new Array(n).fill(0), invh2 = 1/(h*h);
+  for (let i = 1; i < n-1; i++) out[i] = (y[i-1] - 2*y[i] + y[i+1]) * invh2;
+  return out;
+}
+
+function firstDerivative(y, h) {
+  const n = y.length, yp = new Array(n).fill(0);
+  for (let i = 1; i < n-1; i++) yp[i] = (y[i+1] - y[i-1])/(2*h);
+  yp[0] = (y[1]-y[0])/h; yp[n-1]=(y[n-1]-y[n-2])/h;
+  return yp;
+}
+function secondDerivative(y, h) { return applyD2(y, h); }
+
+function curvatureAndRadius(y, h, {minKappa = 1e-12, flipSign = false} = {}) {
+  const yp  = firstDerivative(y, h);
+  const ypp = secondDerivative(y, h);
+  const n = y.length, kappa = new Array(n), R = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const denom = Math.pow(1 + yp[i]*yp[i], 1.5);
+    let kap = ypp[i] / Math.max(denom, 1e-18);
+    if (flipSign) kap = -kap;
+    if (Math.abs(kap) < minKappa) { kappa[i]=0; R[i] = (kap>=0)? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY; }
+    else { kappa[i]=kap; R[i]=1/kap; }
+  }
+  return { kappa, R, yp, ypp };
+}
+  
+  function computeRadii(points){
+    cAndR = curvatureAndRadius(points, spacing);
+    return cAndR.R;
+  }
+
+  function applySavitzkyGolayFilter(heights) { 
+    const h = spacing;
+    const window =  nineOdd( nineOdd(9) ); // 9 punten
+    const poly   = 3;
+
+    const y   = savgolFilterEdgeCorrected(heights, window, poly, 0);
+    const yp  = savgolFilterEdgeCorrected(heights, window, poly, 1, h);
+    const ypp = savgolFilterEdgeCorrected(heights, window, poly, 2, h);
+
+    const { kappa, R } = curvatureAndRadiusSignedFromDerivs(yp, ypp);
+    return { y, R };
+  }
+  
+  /**
+ * Fit een cirkel aan 2D punten (x,y) via een algebraische least-squares (Kåsa) aanpak,
+ * met centreren voor betere numerieke stabiliteit.
+ *
+ * @param {Array<{x:number,y:number}>} pts - minstens 3 punten
+ * @returns {{
+ *   xc:number, yc:number, R:number,
+ *   rmse:number,
+ *   ok:boolean, reason?:string
+ * }}
+ */
+function fitCircle(pts) {
+  if (!pts || pts.length < 3) {
+    return { ok:false, reason: "At least 3 points required to fit a circle" };
+  }
+
+  // 1) Centreer de data rond het centroid voor numerieke stabiliteit
+  let sx = 0, sy = 0;
+  for (const p of pts) { sx += p.x; sy += p.y; }
+  const mx = sx / pts.length, my = sy / pts.length;
+
+  // 2) Stel het lineaire stelsel op: 2*x*a + 2*y*b + c = x^2 + y^2 (in gecentreerde coördinaten)
+  // Onbekenden in gecentreerd stelsel: a' = xc', b' = yc', c' = R^2 - a'^2 - b'^2
+  // We lossen M * [a', b', c']^T = rhs in least-squares zin.
+  let M11=0, M12=0, M13=0,
+      M22=0, M23=0,
+      M33=pts.length; // som(1)
+  let R1=0, R2=0, R3=0;
+
+  for (const p of pts) {
+    const x = p.x - mx;
+    const y = p.y - my;
+    const rhs = x*x + y*y;
+    // rijen zijn [2x, 2y, 1]
+    const u1 = 2*x, u2 = 2*y, u3 = 1;
+
+    // Accumuleer normale vergelijkingen: M = sum(u u^T), R = sum(u * rhs)
+    M11 += u1*u1;        M12 += u1*u2;        M13 += u1*u3;
+                          M22 += u2*u2;        M23 += u2*u3;
+                                                // M33 = sum(u3*u3) = N
+    R1  += u1*rhs;       R2  += u2*rhs;       R3  += u3*rhs;
+  }
+
+  // Symmetrische 3x3 matrix uitwerken
+  const M = [
+    [M11, M12, M13],
+    [M12, M22, M23],
+    [M13, M23, M33],
+  ];
+  const R = [R1, R2, R3];
+
+  // 3) Los M * x = R op (kleine 3x3; we doen handmatige inverse via Cramer/adjoint)
+  const det = det3(M);
+  if (Math.abs(det) < 1e-12) {
+    return { ok:false, reason: "Badly conditioned (almost collinear?)" };
+  }
+  const Minv = inv3(M, det);
+  const sol = mulMatVec(Minv, R); // [a', b', c']
+
+  const ax = sol[0];
+  const by = sol[1];
+  const c  = sol[2];
+
+  // 4) Terug naar originele coördinaten:
+  // In gecentreerd stelsel staat de cirkel: (x - a')^2 + (y - b')^2 = a'^2 + b'^2 + c'
+  // Dus straal: R = sqrt(a'^2 + b'^2 + c')
+  // Middenpunt in origineel: (x_c, y_c) = (mx + a', my + b')
+  const xc = mx + ax;
+  const yc = my + by;
+  const R4 = ax*ax + by*by + c;
+  if (R4 <= 0) {
+    return { ok:false, reason: "Negativ/invalid radius (noise/degeneration?)" };
+  }
+  const Rfit = Math.sqrt(R4);
+
+  // 5) Foutmaat (geometrische afstand tot cirkel als residu)
+  let sse = 0;
+  for (const p of pts) {
+    const dx = p.x - xc, dy = p.y - yc;
+    const ri = Math.hypot(dx, dy);
+    const ei = ri - Rfit;
+    sse += ei*ei;
+  }
+  const rmse = Math.sqrt(sse / pts.length);
+
+  return { ok:true, xc, yc, R: Rfit, rmse };
+}
+
+// ---- Kleine lineaire-algebra helpers (3x3) ----
+function det3(M){
+  const [a,b,c] = M[0], [d,e,f] = M[1], [g,h,i] = M[2];
+  return a*(e*i - f*h) - b*(d*i - f*g) + c*(d*h - e*g);
+}
+function inv3(M, det=null){
+  const [a,b,c] = M[0], [d,e,f] = M[1], [g,h,i] = M[2];
+  const A =  (e*i - f*h), B = -(d*i - f*g), C =  (d*h - e*g);
+  const D = -(b*i - c*h), E =  (a*i - c*g), F = -(a*h - b*g);
+  const G =  (b*f - c*e), H = -(a*f - c*d), I =  (a*e - b*d);
+  const Dt = det ?? (a*A + b*B + c*C);
+  const invDt = 1.0 / Dt;
+  // adjoint getransponeerd (cofactor-matrix^T)
+  return [
+    [A*invDt, D*invDt, G*invDt],
+    [B*invDt, E*invDt, H*invDt],
+    [C*invDt, F*invDt, I*invDt],
+  ];
+}
+function mulMatVec(M, v){
+  return [
+    M[0][0]*v[0] + M[0][1]*v[1] + M[0][2]*v[2],
+    M[1][0]*v[0] + M[1][1]*v[1] + M[1][2]*v[2],
+    M[2][0]*v[0] + M[2][1]*v[1] + M[2][2]*v[2],
+  ];
+}
+
+/**
+ * Bepaal het hoekbereik (in radialen) waaronder de punten liggen t.o.v. (xc,yc).
+ * Handig om slechts het relevante boogstuk te tekenen.
+ */
+function arcAngleSpan(points, xc, yc) {
+  const angles = points.map(p => Math.atan2(p.y - yc, p.x - xc));
+  // Normaliseer en bepaal min/max via “smallest spanning arc”.
+  // We zoeken het grootste gat op de unit circle en nemen de complement als boog.
+  const sorted = angles.slice().sort((a,b)=>a-b);
+  let maxGap = -1, gapIdx = 0;
+  for (let k=0; k<sorted.length-1; k++) {
+    const gap = sorted[k+1] - sorted[k];
+    if (gap > maxGap) { maxGap = gap; gapIdx = k; }
+  }
+  // Vergeet de “wrap-around” gap tussen laatste en eerste + 2π
+  const wrapGap = (sorted[0] + 2*Math.PI) - sorted[sorted.length-1];
+  if (wrapGap > maxGap) {
+    // boog loopt van sorted[0] tot sorted[last]
+    return { start: sorted[0], end: sorted[sorted.length-1] };
+  } else {
+    // boog loopt van sorted[gapIdx+1] tot sorted[gapIdx]
+    return { start: sorted[gapIdx+1], end: sorted[gapIdx] };
+  }
+}
+
+function plotBestFitCirlce(ctx, heights) {
+  var n = heights.length;
+  const points = Array.from({length:n},(_,i) => { return {x: i * spacing, y: heights[i]}; });
+  const fit = fitCircle(points);
+  if (!fit.ok) {
+    console.warn("Circle fit failed:", fit.reason);
+    return;
+  }
+
+  ctx.strokeStyle=colorSmoothed;
+  const bestFitArcHeights = Array.from({length: n}, (_, i) => {
+    var x = i * spacing;
+    var dx = x - fit.xc;
+    var dy = Math.sqrt(fit.R * fit.R - dx * dx);
+    var y = fit.yc + dy;
+    return y;
+  });
+  const bestFitRadii = Array(n).fill(fit.R);
+  labelBestFittingCircle.innerHTML = 'Best fitting circle: R = ' + fit.R.toFixed(2) + 'm';
+  plotHeightsAndRadii(ctx,bestFitArcHeights,bestFitRadii,colorBestFittingCircle, false);
+
+  return bestFitArcHeights;
+}
+
+    function niceTicks(min,max,maxTicks){
+      if(!Number.isFinite(min)||!Number.isFinite(max)||min===max) return {ticks:[min],step:1};
+      if(min>max){const t=min;min=max;max=t;}
+      const range=max-min,raw=range/Math.max(1,maxTicks);
+      const mag=Math.pow(10,Math.floor(Math.log10(raw)));
+      const frac=raw/mag;
+      let step=(frac>=5)?10*mag:(frac>=2)?5*mag:(frac>=1)?2*mag:mag;
+      const tmin=Math.floor(min/step)*step;
+      const tmax=Math.ceil(max/step)*step;
+      const ticks=[];
+      for(let v=tmin;v<=tmax+1e-12;v+=step)ticks.push(v);
+      return{ticks,step};
+    }
+  
+    function drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax){
+      yMax += 0.0001; // allow some room at the top for the labels
+      const grid=getComputedStyle(document.documentElement).getPropertyValue('--grid')||'#1e2538';
+      const ink=getComputedStyle(document.documentElement).getPropertyValue('--ink')||'#e9eef5';
+      ctx.clearRect(0,0,W,H);
+      ctx.font='12px system-ui,sans-serif';
+      const plotW=W-(margin.l+margin.r), plotH=H-(margin.t+margin.b);
+      const sx=plotW/((xMax-xMin)||1), sy=plotH/((yMax-yMin)||1);
+      function X(x){return margin.l+(x-xMin)*sx;}
+      function Y(y){return H-margin.b-(y-yMin)*sy;}
+      const xt=niceTicks(xMin,xMax,6), yt=niceTicks(yMin,yMax,5);
+      ctx.strokeStyle=grid; ctx.lineWidth=1;
+      ctx.beginPath();
+      xt.ticks.forEach(v=>{const x=X(v);ctx.moveTo(x,margin.t);ctx.lineTo(x,H-margin.b);});
+      yt.ticks.forEach(v=>{const y=Y(v);ctx.moveTo(margin.l,y);ctx.lineTo(W-margin.r,y);});
+      ctx.stroke();
+      ctx.strokeStyle=grid; ctx.strokeRect(margin.l,margin.t,plotW,plotH);
+      ctx.fillStyle=ink; ctx.textAlign='center'; ctx.textBaseline='top';
+      xt.ticks.forEach(v=>ctx.fillText((v * 1000).toFixed(0),X(v),H-margin.b+4));
+      ctx.textAlign='right'; ctx.textBaseline='middle';
+      yt.ticks.forEach(v=>ctx.fillText((v * 1000).toFixed(1),margin.l-6,Y(v)));
+      return{X,Y};
+    }
+  
+    function strokeSmooth(ctx,heights,X,Y){
+      const n=heights.length;if(n===0)return;
+      x = 0;
+      ctx.beginPath();ctx.moveTo(X(x),Y(heights[0]));
+      for(let i=1;i<n;i++) {
+        x += spacing;
+        ctx.lineTo(X(x),Y(heights[i]));
+      }
+      ctx.stroke();
+    }
+  
+    function plotHeightsAndRadii(ctx,heights,radii,color,plotLabels=true){
+      const W=cY.width,H=cY.height,margin={l:56,t:18,r:14,b:44};
+      const ys=heights.map(p=>p);
+      const xMin=0,xMax=heights.length * spacing;
+      const yMin=Math.min(...ys),yMax=Math.max(...ys);
+      const axes=drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax);
+      ctx.fillStyle=color;
+      x = 0;
+      heights.forEach(
+        p=>{
+            var px = axes.X(x);
+            var py = axes.Y(p);
+
+            ctx.beginPath();ctx.arc(px,py,2,0,Math.PI*2);ctx.fill();
+            x += spacing;
+        }
+      );
+      ctx.strokeStyle=color;ctx.lineWidth=1;strokeSmooth(ctx,heights,axes.X,axes.Y);
+  
+      const INF_THRESH_MM=1_000_000;
+      ctx.fillStyle=colorLabels;ctx.font='12px system-ui,sans-serif';
+      ctx.textAlign='left';ctx.textBaseline='bottom';
+      xOffset = 10;
+      yOffset = -4;
+      x = 0;
+      for(let i=1;i<heights.length-1;i++){
+        x += spacing;
+        const R=radii[i];
+        let label;
+        if(!Number.isFinite(R) || Math.abs(R)>INF_THRESH_MM) label='∞';
+        else label=(-R).toFixed(2)+'m';
+
+        if (plotLabels) {
+            ctx.fillText(label,axes.X(x) + xOffset,axes.Y(heights[i]) + yOffset);
+        }
+      }
+    }
+
+    function getDifferenceColor(heightDifference) {
+      return Math.abs(heightDifference) >= 0.1 
+                ? '#ff0000'
+                : Math.abs(heightDifference) >= 0.05
+                    ? '#ff8000'
+                    : '#ffffff';
+    }
+
+    function plotPointsAndDifferenceLabels(ctx, axes, h1, h2, color1, color2) {
+        ctx.fillStyle=colorLabels;ctx.font='12px system-ui,sans-serif';
+        ctx.textAlign='left';ctx.textBaseline='bottom';
+        ctx.strokeStyle = colorDifference;
+
+        const xOffset = 10;
+        const yOffset = -4;
+        var n = h1.length;
+        for (i = 0; i < n; i++) {
+            var x = axes.X(i * spacing);
+            var hh1 = h1[i];
+            var hh2 = h2[i];
+            var diff = (hh1 - hh2) * 1000;
+            var y1 = axes.Y(hh1);
+            var y2 = axes.Y(hh2);
+            var diffColor = getDifferenceColor(diff);
+            ctx.fillStyle=diffColor;
+            ctx.fillText((diff > 0 ? '+' : '') + diff.toFixed(2), x + xOffset, y1 + yOffset);
+        }
+
+        ctx.strokeStyle = '#ffffff';
+        for (i = 0; i < n; i++) {
+            var x = axes.X(i * spacing);
+            var hh1 = h1[i];
+            var hh2 = h2[i];
+            var diff = (hh1 - hh2) * 1000;
+            var y1 = axes.Y(hh1);
+            var y2 = axes.Y(hh2);
+            ctx.beginPath();
+            ctx.moveTo(x, y1);
+            ctx.lineTo(x, y2);
+            ctx.stroke();
+
+            ctx.fillStyle = color1;
+            ctx.beginPath();
+            ctx.arc(x, y1, 2, 0, Math.PI*2);
+            ctx.fill();
+
+            ctx.fillStyle = color2;
+            ctx.beginPath();
+            ctx.arc(x, y2, 2, 0, Math.PI*2);
+            ctx.fill();
+        }
+    }
+
+    function plotDiffs(ctx,actualHeights,smoothedHeights,bestFitArcHeights){
+      function plotHeights(selectEl) {
+        if (selectEl.value == optionMeasured) {
+            ctx.strokeStyle=colorMeasurements;
+            strokeSmooth(ctx,actualHeights,axes.X,axes.Y);
+            return { heights: actualHeights, label: 'M', color: colorMeasurements };
+        }
+        else if (selectEl.value == optionSmoothed) {
+            ctx.strokeStyle=colorSmoothed;
+            strokeSmooth(ctx,smoothedHeights,axes.X,axes.Y);
+            return { heights: smoothedHeights, label: 'S', color: colorSmoothed };
+        }
+        else {
+            ctx.strokeStyle=colorBestFittingCircle;
+            strokeSmooth(ctx,bestFitArcHeights,axes.X,axes.Y);
+            return { heights: bestFitArcHeights, label: 'B', color: colorBestFittingCircle };
+        }
+      }
+
+      const W=cY.width,H=cY.height,margin={l:56,t:18,r:14,b:44};
+      const ys=actualHeights;
+      const yt=smoothedHeights;
+      const xMin=0,xMax=actualHeights.length * spacing;
+      const ysMin=Math.min(...ys),ysMax=Math.max(...ys);
+      const ytMin=Math.min(...yt),ytMax=Math.max(...yt);
+      const yMin=Math.min(ysMin, ytMin), yMax=Math.max(ysMax, ytMax);
+      const axes=drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax);
+      
+      ctx.lineWidth=1;
+      
+      result1 = plotHeights(select1);
+      result2 = plotHeights(select2);
+      heights1 = result1.heights;
+      heights2 = result2.heights;
+      color1 = result1.color;
+      color2 = result2.color;
+      diffLabel = result1.label + ' - ' + result2.label;
+      plotPointsAndDifferenceLabels(ctx, axes, heights1, heights2, color1, color2);
+      return {
+        heights: Array.from({length:heights1.length},(_,i) => {
+            return heights1[i] - heights2[i];
+        }),
+        label: diffLabel
+      };
+    }
+
+    function run(){
+      msgEl.textContent='';
+      try{
+        spacing=Number(spacingEl.value) / 1000;
+        const heights=parseHeights(dataEl.value);
+        
+        const radii=computeRadii(heights);
+        plotHeightsAndRadii(gY, heights, radii, colorMeasurements);
+        
+        const filtered = applySavitzkyGolayFilter(heights);
+        plotHeightsAndRadii(gSmooth, filtered.y,filtered.R, colorSmoothed);
+
+        const bestFitArcHeights = plotBestFitCirlce(gArc, heights);
+
+        const diffsResult = plotDiffs(gDiff, heights, filtered.y, bestFitArcHeights);
+        const diffs = diffsResult.heights;
+        const diffLabel = diffsResult.label;
+        document.getElementById('labelDiff').innerText = 'Difference (' + diffLabel + ')';
+
+        summaryEl.innerHTML=heights.length+' points · Δ='+spacing+' mm';
+
+        textSmoothed = "";
+        taDiff.innerHTML = '';
+        textBestFittingCircle = "";
+        const n=heights.length;
+        for(let i=0; i<n; i++) {
+            if (i != 0) {
+               textSmoothed += '\n'; 
+               textDiff += '\n'; 
+               textBestFittingCircle += '\n';
+            }
+
+            height = heights[i] * 1000;
+            smoothedHeight = filtered.y[i] * 1000;
+            bestFitArcHeight = bestFitArcHeights[i] * 1000;
+            differenceHeight = diffs[i] * 1000;
+
+            textSmoothed += smoothedHeight.toFixed(2).toString();
+            textDiff = (differenceHeight > 0 ? '+' : '') + differenceHeight.toFixed(2).toString();
+            diffColor = getDifferenceColor(differenceHeight);
+            taDiff.innerHTML += '<span style="' + diffColor + '">' + textDiff + '</br></span>';
+            textBestFittingCircle += bestFitArcHeight.toFixed(2).toString();
+        }
+
+        taSmoothed.value = textSmoothed;
+        taBestFittingCircle.value = textBestFittingCircle;
+      }catch(err){msgEl.textContent=err.message||String(err);}
+    }
+  
+    runBtn.addEventListener('click',run);
+    demoBtn.addEventListener('click',()=>{
+      spacingEl.value=20;msgEl.textContent='';
+      dataEl.value=[
+'15.85',
+'16.40',
+'16.85',
+'17.20',
+'17.55',
+'17.80',
+'18.00',
+'18.10',
+'18.175',
+'18.25',
+'18.30',
+'18.30',
+'18.25',
+'18.15',
+'18.00',
+'17.85',
+'17.60',
+'17.25',
+'16.85',
+'16.25',
+'15.65'
+      ].join('\n');
+    });
+
+    // Hulpfunctie: vul een selectelement met opties
+    function fillSelect(selectEl, exclude = null) {
+        var currentSelection = selectEl.value;
+        selectEl.innerHTML = ""; // leegmaken
+        for (const opt of options) {
+            if (opt !== exclude) 
+            {
+                const el = document.createElement("option");
+                el.value = opt;
+                el.textContent = opt;
+                selectEl.appendChild(el);
+            }
+        }
+        if (currentSelection != exclude && currentSelection != null && currentSelection != "") {
+            selectEl.value=currentSelection;
+        }
+    }
+
+    // initialiseren
+    fillSelect(select1);
+    fillSelect(select2, select1.value);
+
+    // update tweede select als de eerste verandert
+    select1.addEventListener("change", () => {
+        const selected = select1.value;
+        fillSelect(select2, selected);
+        run();
+    });
+
+    select2.addEventListener("change", () => {
+        const selected = select2.value;
+        fillSelect(select1, null);
+        run();
+    });
+
+  </script>
+  </body>
+  </html>
+  
