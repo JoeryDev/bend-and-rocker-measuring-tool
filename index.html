@@ -105,7 +105,7 @@
   <body>
     <div class="wrap">
       <h1>Rocker / Bend measuring tool</h1  >
-      <h5>Version 1, by joerydev, november 2025</h5>
+      <h5>Version 2, by joerydev, november 2025</h5>
         A tool to assist in measuring the rocker or bend of your shorttrack or speedskating blades,
         without the need for expensive equipment such as the 350 Euro Marchese Rocker Gauge or similar. 
         I intend to add a short description of how to measure the rocker or bend using nothing more fancy
@@ -150,8 +150,8 @@
                     <textarea id="taSmoothed" class="dataRow" spellcheck="false" readonly></textarea>
                 </div>
                 <div class="col">
-                    <div class="col-head">Best fitting circle</div>
-                    <textarea id="taBestFittingCircle" class="dataRow" spellcheck="false" readonly></textarea>
+                    <div class="col-head">Circle</div>
+                    <textarea id="taArc" class="dataRow" spellcheck="false" readonly></textarea>
                 </div>
                 <div class="col">
                     <div class="col-head" id="labelDiff">Difference</div>
@@ -162,7 +162,7 @@
         <p id="msg" class="error"></p>
       </div>
   
-        <div class="row" style="align-items: center">
+        <div class="row" style="align-items: center;">
           <button class="btn" id="run">Calculate</button>
           <button id="demo">Fill example</button>
           <div class="pill" id="summary">–</div>
@@ -173,7 +173,11 @@
         <canvas id="plotY" width="900" height="340"></canvas>
         <h3>Smoothed blade heights and radii</h3>
         <canvas id="plotSmooth" width="900" height="340"></canvas>
-        <h3 id="labelBestFittingCircle">Best fitting circle</h3>
+        <div style="margin-top: 15px; margin-bottom: 3px;">
+            <h3 style="display:inline;">Circle: </h3>
+            <select style="display:inline;" id="selectArc"></select>
+            <h3 style="display:inline;">m</h3>
+        </div>
         <canvas id="plotArc" width="900" height="340"></canvas>
         <div style="margin-top: 15px; margin-bottom: 3px;">
             <h3 style="display:inline;">Difference in mm: </h3>
@@ -193,7 +197,7 @@
     const demoBtn = el('demo');
     const msgEl = el('msg');
     const summaryEl = el('summary');
-    const labelBestFittingCircle = el('labelBestFittingCircle');
+    const selectArc = el('selectArc');
 
     const cY = el('plotY');
     const cSmooth = el('plotSmooth');
@@ -208,11 +212,11 @@
     const taData = el('taData');
     const taSmoothed = el('taSmoothed');
     const taDiff = el('taDiff');
-    const taBestFittingCircle = el('taBestFittingCircle');
+    const taArc = el('taArc');
 
     const colorMeasurements = '#0080ff';
     const colorSmoothed = '#00ff00';
-    const colorBestFittingCircle = '#ffff00';
+    const colorArc = '#ffff00';
     const colorDifference = '#ffffff';
     const colorLabels = '#ffffff';
     //const colorPoints = '#00ffff';
@@ -221,13 +225,13 @@
     const select2 = document.getElementById("select2");
     const optionMeasured="Measured";
     const optionSmoothed = "Smoothed";
-    const optionBestFittingCircle = "Best Fitting Circle";
-    const options=[optionMeasured, optionSmoothed, optionBestFittingCircle];
+    const optionCircle = "Circle";
+    const options=[optionMeasured, optionSmoothed, optionCircle];
   
     // ===== Scroll sync (single scrollbar: the master) =====
     (function setupScrollSync() {
         const master = document.getElementById('data');
-        const slaves = [document.getElementById('taSmoothed'), document.getElementById('taDiff'), document.getElementById('taBestFittingCircle')];
+        const slaves = [document.getElementById('taSmoothed'), document.getElementById('taDiff'), document.getElementById('taArc')];
         let syncing = false;
 
         function syncFromMaster() {
@@ -250,7 +254,7 @@
     });
 
     (function setupScrollSync2() {
-        const synced = [document.getElementById('taSmoothed'), document.getElementById('taDiff'), document.getElementById('taBestFittingCircle'), document.getElementById('data')];
+        const synced = [document.getElementById('taSmoothed'), document.getElementById('taDiff'), document.getElementById('taArc'), document.getElementById('data')];
         let syncing = false;
 
         function sync(master) {
@@ -577,409 +581,571 @@ function curvatureAndRadius(y, h, {minKappa = 1e-12, flipSign = false} = {}) {
     return { y, R };
   }
   
+    /**
+   * Fit een cirkel aan 2D punten (x,y) via een algebraische least-squares (Kåsa) aanpak,
+   * met centreren voor betere numerieke stabiliteit.
+   *
+   * @param {Array<{x:number,y:number}>} pts - minstens 3 punten
+   * @returns {{
+   *   xc:number, yc:number, R:number,
+   *   rmse:number,
+   *   ok:boolean, reason?:string
+   * }}
+   */
+  function fitCircle(pts) {
+    if (!pts || pts.length < 3) {
+      return { ok:false, reason: "At least 3 points required to fit a circle" };
+    }
+
+    // 1) Centreer de data rond het centroid voor numerieke stabiliteit
+    let sx = 0, sy = 0;
+    for (const p of pts) { sx += p.x; sy += p.y; }
+    const mx = sx / pts.length, my = sy / pts.length;
+
+    // 2) Stel het lineaire stelsel op: 2*x*a + 2*y*b + c = x^2 + y^2 (in gecentreerde coördinaten)
+    // Onbekenden in gecentreerd stelsel: a' = xc', b' = yc', c' = R^2 - a'^2 - b'^2
+    // We lossen M * [a', b', c']^T = rhs in least-squares zin.
+    let M11=0, M12=0, M13=0,
+        M22=0, M23=0,
+        M33=pts.length; // som(1)
+    let R1=0, R2=0, R3=0;
+
+    for (const p of pts) {
+      const x = p.x - mx;
+      const y = p.y - my;
+      const rhs = x*x + y*y;
+      // rijen zijn [2x, 2y, 1]
+      const u1 = 2*x, u2 = 2*y, u3 = 1;
+
+      // Accumuleer normale vergelijkingen: M = sum(u u^T), R = sum(u * rhs)
+      M11 += u1*u1;        M12 += u1*u2;        M13 += u1*u3;
+                            M22 += u2*u2;        M23 += u2*u3;
+                                                  // M33 = sum(u3*u3) = N
+      R1  += u1*rhs;       R2  += u2*rhs;       R3  += u3*rhs;
+    }
+
+    // Symmetrische 3x3 matrix uitwerken
+    const M = [
+      [M11, M12, M13],
+      [M12, M22, M23],
+      [M13, M23, M33],
+    ];
+    const R = [R1, R2, R3];
+
+    // 3) Los M * x = R op (kleine 3x3; we doen handmatige inverse via Cramer/adjoint)
+    const det = det3(M);
+    if (Math.abs(det) < 1e-12) {
+      return { ok:false, reason: "Badly conditioned (almost collinear?)" };
+    }
+    const Minv = inv3(M, det);
+    const sol = mulMatVec(Minv, R); // [a', b', c']
+
+    const ax = sol[0];
+    const by = sol[1];
+    const c  = sol[2];
+
+    // 4) Terug naar originele coördinaten:
+    // In gecentreerd stelsel staat de cirkel: (x - a')^2 + (y - b')^2 = a'^2 + b'^2 + c'
+    // Dus straal: R = sqrt(a'^2 + b'^2 + c')
+    // Middenpunt in origineel: (x_c, y_c) = (mx + a', my + b')
+    const xc = mx + ax;
+    const yc = my + by;
+    const R4 = ax*ax + by*by + c;
+    if (R4 <= 0) {
+      return { ok:false, reason: "Negativ/invalid radius (noise/degeneration?)" };
+    }
+    const Rfit = Math.sqrt(R4);
+
+    // 5) Foutmaat (geometrische afstand tot cirkel als residu)
+    let sse = 0;
+    for (const p of pts) {
+      const dx = p.x - xc, dy = p.y - yc;
+      const ri = Math.hypot(dx, dy);
+      const ei = ri - Rfit;
+      sse += ei*ei;
+    }
+    const rmse = Math.sqrt(sse / pts.length);
+
+    return { ok:true, xc, yc, R: Rfit, rmse };
+  }
+
   /**
- * Fit een cirkel aan 2D punten (x,y) via een algebraische least-squares (Kåsa) aanpak,
- * met centreren voor betere numerieke stabiliteit.
- *
- * @param {Array<{x:number,y:number}>} pts - minstens 3 punten
- * @returns {{
- *   xc:number, yc:number, R:number,
- *   rmse:number,
- *   ok:boolean, reason?:string
- * }}
+ * Beste middelpunt (xc, yc) bij vaste straal R.
+ * Gauss–Newton + Levenberg damping + line search.
  */
-function fitCircle(pts) {
-  if (!pts || pts.length < 3) {
-    return { ok:false, reason: "At least 3 points required to fit a circle" };
-  }
+function fitCircleFixedRadius(pts, R, maxIter = 50, tol = 1e-9, lambda0 = 1e-6) {
+  if (!pts || pts.length < 3) return { ok:false, reason:"Minstens 3 punten nodig" };
 
-  // 1) Centreer de data rond het centroid voor numerieke stabiliteit
-  let sx = 0, sy = 0;
-  for (const p of pts) { sx += p.x; sy += p.y; }
-  const mx = sx / pts.length, my = sy / pts.length;
+  // Start met vrij-fit als init
+  const init = fitCircle(pts);
+  if (!init.ok) return init;
 
-  // 2) Stel het lineaire stelsel op: 2*x*a + 2*y*b + c = x^2 + y^2 (in gecentreerde coördinaten)
-  // Onbekenden in gecentreerd stelsel: a' = xc', b' = yc', c' = R^2 - a'^2 - b'^2
-  // We lossen M * [a', b', c']^T = rhs in least-squares zin.
-  let M11=0, M12=0, M13=0,
-      M22=0, M23=0,
-      M33=pts.length; // som(1)
-  let R1=0, R2=0, R3=0;
+  let xc = init.xc;
+  let yc = init.yc;
 
-  for (const p of pts) {
-    const x = p.x - mx;
-    const y = p.y - my;
-    const rhs = x*x + y*y;
-    // rijen zijn [2x, 2y, 1]
-    const u1 = 2*x, u2 = 2*y, u3 = 1;
+  let lambda = lambda0;
 
-    // Accumuleer normale vergelijkingen: M = sum(u u^T), R = sum(u * rhs)
-    M11 += u1*u1;        M12 += u1*u2;        M13 += u1*u3;
-                          M22 += u2*u2;        M23 += u2*u3;
-                                                // M33 = sum(u3*u3) = N
-    R1  += u1*rhs;       R2  += u2*rhs;       R3  += u3*rhs;
-  }
-
-  // Symmetrische 3x3 matrix uitwerken
-  const M = [
-    [M11, M12, M13],
-    [M12, M22, M23],
-    [M13, M23, M33],
-  ];
-  const R = [R1, R2, R3];
-
-  // 3) Los M * x = R op (kleine 3x3; we doen handmatige inverse via Cramer/adjoint)
-  const det = det3(M);
-  if (Math.abs(det) < 1e-12) {
-    return { ok:false, reason: "Badly conditioned (almost collinear?)" };
-  }
-  const Minv = inv3(M, det);
-  const sol = mulMatVec(Minv, R); // [a', b', c']
-
-  const ax = sol[0];
-  const by = sol[1];
-  const c  = sol[2];
-
-  // 4) Terug naar originele coördinaten:
-  // In gecentreerd stelsel staat de cirkel: (x - a')^2 + (y - b')^2 = a'^2 + b'^2 + c'
-  // Dus straal: R = sqrt(a'^2 + b'^2 + c')
-  // Middenpunt in origineel: (x_c, y_c) = (mx + a', my + b')
-  const xc = mx + ax;
-  const yc = my + by;
-  const R4 = ax*ax + by*by + c;
-  if (R4 <= 0) {
-    return { ok:false, reason: "Negativ/invalid radius (noise/degeneration?)" };
-  }
-  const Rfit = Math.sqrt(R4);
-
-  // 5) Foutmaat (geometrische afstand tot cirkel als residu)
-  let sse = 0;
-  for (const p of pts) {
-    const dx = p.x - xc, dy = p.y - yc;
-    const ri = Math.hypot(dx, dy);
-    const ei = ri - Rfit;
-    sse += ei*ei;
-  }
-  const rmse = Math.sqrt(sse / pts.length);
-
-  return { ok:true, xc, yc, R: Rfit, rmse };
-}
-
-// ---- Kleine lineaire-algebra helpers (3x3) ----
-function det3(M){
-  const [a,b,c] = M[0], [d,e,f] = M[1], [g,h,i] = M[2];
-  return a*(e*i - f*h) - b*(d*i - f*g) + c*(d*h - e*g);
-}
-function inv3(M, det=null){
-  const [a,b,c] = M[0], [d,e,f] = M[1], [g,h,i] = M[2];
-  const A =  (e*i - f*h), B = -(d*i - f*g), C =  (d*h - e*g);
-  const D = -(b*i - c*h), E =  (a*i - c*g), F = -(a*h - b*g);
-  const G =  (b*f - c*e), H = -(a*f - c*d), I =  (a*e - b*d);
-  const Dt = det ?? (a*A + b*B + c*C);
-  const invDt = 1.0 / Dt;
-  // adjoint getransponeerd (cofactor-matrix^T)
-  return [
-    [A*invDt, D*invDt, G*invDt],
-    [B*invDt, E*invDt, H*invDt],
-    [C*invDt, F*invDt, I*invDt],
-  ];
-}
-function mulMatVec(M, v){
-  return [
-    M[0][0]*v[0] + M[0][1]*v[1] + M[0][2]*v[2],
-    M[1][0]*v[0] + M[1][1]*v[1] + M[1][2]*v[2],
-    M[2][0]*v[0] + M[2][1]*v[1] + M[2][2]*v[2],
-  ];
-}
-
-/**
- * Bepaal het hoekbereik (in radialen) waaronder de punten liggen t.o.v. (xc,yc).
- * Handig om slechts het relevante boogstuk te tekenen.
- */
-function arcAngleSpan(points, xc, yc) {
-  const angles = points.map(p => Math.atan2(p.y - yc, p.x - xc));
-  // Normaliseer en bepaal min/max via “smallest spanning arc”.
-  // We zoeken het grootste gat op de unit circle en nemen de complement als boog.
-  const sorted = angles.slice().sort((a,b)=>a-b);
-  let maxGap = -1, gapIdx = 0;
-  for (let k=0; k<sorted.length-1; k++) {
-    const gap = sorted[k+1] - sorted[k];
-    if (gap > maxGap) { maxGap = gap; gapIdx = k; }
-  }
-  // Vergeet de “wrap-around” gap tussen laatste en eerste + 2π
-  const wrapGap = (sorted[0] + 2*Math.PI) - sorted[sorted.length-1];
-  if (wrapGap > maxGap) {
-    // boog loopt van sorted[0] tot sorted[last]
-    return { start: sorted[0], end: sorted[sorted.length-1] };
-  } else {
-    // boog loopt van sorted[gapIdx+1] tot sorted[gapIdx]
-    return { start: sorted[gapIdx+1], end: sorted[gapIdx] };
-  }
-}
-
-function plotBestFitCirlce(ctx, heights) {
-  var n = heights.length;
-  const points = Array.from({length:n},(_,i) => { return {x: i * spacing, y: heights[i]}; });
-  const fit = fitCircle(points);
-  if (!fit.ok) {
-    console.warn("Circle fit failed:", fit.reason);
-    return;
-  }
-
-  ctx.strokeStyle=colorSmoothed;
-  const bestFitArcHeights = Array.from({length: n}, (_, i) => {
-    var x = i * spacing;
-    var dx = x - fit.xc;
-    var dy = Math.sqrt(fit.R * fit.R - dx * dx);
-    var y = fit.yc + dy;
-    return y;
-  });
-  const bestFitRadii = Array(n).fill(fit.R);
-  labelBestFittingCircle.innerHTML = 'Best fitting circle: R = ' + fit.R.toFixed(2) + 'm';
-  plotHeightsAndRadii(ctx,bestFitArcHeights,bestFitRadii,colorBestFittingCircle, false);
-
-  return bestFitArcHeights;
-}
-
-    function niceTicks(min,max,maxTicks){
-      if(!Number.isFinite(min)||!Number.isFinite(max)||min===max) return {ticks:[min],step:1};
-      if(min>max){const t=min;min=max;max=t;}
-      const range=max-min,raw=range/Math.max(1,maxTicks);
-      const mag=Math.pow(10,Math.floor(Math.log10(raw)));
-      const frac=raw/mag;
-      let step=(frac>=5)?10*mag:(frac>=2)?5*mag:(frac>=1)?2*mag:mag;
-      const tmin=Math.floor(min/step)*step;
-      const tmax=Math.ceil(max/step)*step;
-      const ticks=[];
-      for(let v=tmin;v<=tmax+1e-12;v+=step)ticks.push(v);
-      return{ticks,step};
+  const sse = (xc, yc) => {
+    let s=0;
+    for (const p of pts) {
+      const ri = Math.hypot(p.x - xc, p.y - yc) - R;
+      s += ri*ri;
     }
-  
-    function drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax){
-      yMax += 0.0001; // allow some room at the top for the labels
-      const grid=getComputedStyle(document.documentElement).getPropertyValue('--grid')||'#1e2538';
-      const ink=getComputedStyle(document.documentElement).getPropertyValue('--ink')||'#e9eef5';
-      ctx.clearRect(0,0,W,H);
-      ctx.font='12px system-ui,sans-serif';
-      const plotW=W-(margin.l+margin.r), plotH=H-(margin.t+margin.b);
-      const sx=plotW/((xMax-xMin)||1), sy=plotH/((yMax-yMin)||1);
-      function X(x){return margin.l+(x-xMin)*sx;}
-      function Y(y){return H-margin.b-(y-yMin)*sy;}
-      const xt=niceTicks(xMin,xMax,6), yt=niceTicks(yMin,yMax,5);
-      ctx.strokeStyle=grid; ctx.lineWidth=1;
-      ctx.beginPath();
-      xt.ticks.forEach(v=>{const x=X(v);ctx.moveTo(x,margin.t);ctx.lineTo(x,H-margin.b);});
-      yt.ticks.forEach(v=>{const y=Y(v);ctx.moveTo(margin.l,y);ctx.lineTo(W-margin.r,y);});
-      ctx.stroke();
-      ctx.strokeStyle=grid; ctx.strokeRect(margin.l,margin.t,plotW,plotH);
-      ctx.fillStyle=ink; ctx.textAlign='center'; ctx.textBaseline='top';
-      xt.ticks.forEach(v=>ctx.fillText((v * 1000).toFixed(0),X(v),H-margin.b+4));
-      ctx.textAlign='right'; ctx.textBaseline='middle';
-      yt.ticks.forEach(v=>ctx.fillText((v * 1000).toFixed(1),margin.l-6,Y(v)));
-      return{X,Y};
+    return s;
+  };
+
+  let prevSSE = sse(xc, yc);
+
+  for (let iter=0; iter<maxIter; iter++) {
+    let J11=0, J12=0, J22=0, b1=0, b2=0;
+
+    for (const p of pts) {
+      const dx = p.x - xc;
+      const dy = p.y - yc;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 1e-12) continue;
+
+      const r = dist - R;           // residu
+      const inv = 1.0 / dist;
+      const Jx = -dx * inv;         // ∂r/∂xc
+      const Jy = -dy * inv;         // ∂r/∂yc
+
+      // Normale vergelijkingen: (J^T J) Δ = - J^T r
+      J11 += Jx*Jx;
+      J12 += Jx*Jy;
+      J22 += Jy*Jy;
+
+      b1  += -Jx * r;               // LET OP: min-teken!
+      b2  += -Jy * r;               // LET OP: min-teken!
     }
-  
-    function strokeSmooth(ctx,heights,X,Y){
-      const n=heights.length;if(n===0)return;
-      x = 0;
-      ctx.beginPath();ctx.moveTo(X(x),Y(heights[0]));
-      for(let i=1;i<n;i++) {
-        x += spacing;
-        ctx.lineTo(X(x),Y(heights[i]));
+
+    // Levenberg damping
+    const A11 = J11 + lambda;
+    const A12 = J12;
+    const A22 = J22 + lambda;
+
+    const det = A11*A22 - A12*A12;
+    if (Math.abs(det) < 1e-18) break;
+
+    // Los 2x2
+    const dx = ( b1*A22 - b2*A12) / det;
+    const dy = (-b1*A12 + b2*A11) / det;
+
+    // Line search: accepteer alleen als SSE omlaag gaat
+    let alpha = 1.0;
+    let accepted = false;
+    for (let ls=0; ls<10; ls++) {
+      const nx = xc + alpha*dx;
+      const ny = yc + alpha*dy;
+      const newSSE = sse(nx, ny);
+      if (newSSE < prevSSE) {
+        xc = nx; yc = ny; prevSSE = newSSE;
+        // verlaag damping bij succes (sneller)
+        lambda = Math.max(lambda * 0.3, 1e-12);
+        accepted = true;
+        break;
       }
-      ctx.stroke();
+      alpha *= 0.5;  // kleinere stap proberen
     }
-  
-    function plotHeightsAndRadii(ctx,heights,radii,color,plotLabels=true){
-      const W=cY.width,H=cY.height,margin={l:56,t:18,r:14,b:44};
-      const ys=heights.map(p=>p);
-      const xMin=0,xMax=heights.length * spacing;
-      const yMin=Math.min(...ys),yMax=Math.max(...ys);
-      const axes=drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax);
-      ctx.fillStyle=color;
-      x = 0;
-      heights.forEach(
-        p=>{
-            var px = axes.X(x);
-            var py = axes.Y(p);
+    if (!accepted) {
+      // stap werkte niet; demp meer en ga door
+      lambda *= 5;
+    }
 
-            ctx.beginPath();ctx.arc(px,py,2,0,Math.PI*2);ctx.fill();
-            x += spacing;
-        }
-      );
-      ctx.strokeStyle=color;ctx.lineWidth=1;strokeSmooth(ctx,heights,axes.X,axes.Y);
+    if (Math.hypot(dx, dy) * alpha < tol) break;
+  }
+
+  // eindfout
+  let sseFinal = 0;
+  for (const p of pts) {
+    const ri = Math.hypot(p.x - xc, p.y - yc) - R;
+    sseFinal += ri*ri;
+  }
+  const rmse = Math.sqrt(sseFinal / pts.length);
+
+  return { ok:true, xc, yc, rmse };
+}
+
+  // ---- Kleine lineaire-algebra helpers (3x3) ----
+  function det3(M){
+    const [a,b,c] = M[0], [d,e,f] = M[1], [g,h,i] = M[2];
+    return a*(e*i - f*h) - b*(d*i - f*g) + c*(d*h - e*g);
+  }
+  function inv3(M, det=null){
+    const [a,b,c] = M[0], [d,e,f] = M[1], [g,h,i] = M[2];
+    const A =  (e*i - f*h), B = -(d*i - f*g), C =  (d*h - e*g);
+    const D = -(b*i - c*h), E =  (a*i - c*g), F = -(a*h - b*g);
+    const G =  (b*f - c*e), H = -(a*f - c*d), I =  (a*e - b*d);
+    const Dt = det ?? (a*A + b*B + c*C);
+    const invDt = 1.0 / Dt;
+    // adjoint getransponeerd (cofactor-matrix^T)
+    return [
+      [A*invDt, D*invDt, G*invDt],
+      [B*invDt, E*invDt, H*invDt],
+      [C*invDt, F*invDt, I*invDt],
+    ];
+  }
+
+  function mulMatVec(M, v){
+    return [
+      M[0][0]*v[0] + M[0][1]*v[1] + M[0][2]*v[2],
+      M[1][0]*v[0] + M[1][1]*v[1] + M[1][2]*v[2],
+      M[2][0]*v[0] + M[2][1]*v[1] + M[2][2]*v[2],
+    ];
+  }
+
+  /**
+   * Bepaal het hoekbereik (in radialen) waaronder de punten liggen t.o.v. (xc,yc).
+   * Handig om slechts het relevante boogstuk te tekenen.
+   */
+  function arcAngleSpan(points, xc, yc) {
+    const angles = points.map(p => Math.atan2(p.y - yc, p.x - xc));
+    // Normaliseer en bepaal min/max via “smallest spanning arc”.
+    // We zoeken het grootste gat op de unit circle en nemen de complement als boog.
+    const sorted = angles.slice().sort((a,b)=>a-b);
+    let maxGap = -1, gapIdx = 0;
+    for (let k=0; k<sorted.length-1; k++) {
+      const gap = sorted[k+1] - sorted[k];
+      if (gap > maxGap) { maxGap = gap; gapIdx = k; }
+    }
+    // Vergeet de “wrap-around” gap tussen laatste en eerste + 2π
+    const wrapGap = (sorted[0] + 2*Math.PI) - sorted[sorted.length-1];
+    if (wrapGap > maxGap) {
+      // boog loopt van sorted[0] tot sorted[last]
+      return { start: sorted[0], end: sorted[sorted.length-1] };
+    } else {
+      // boog loopt van sorted[gapIdx+1] tot sorted[gapIdx]
+      return { start: sorted[gapIdx+1], end: sorted[gapIdx] };
+    }
+  }
+
+  // Hulpfunctie: vul een selectelement met opties
+  function fillSelect(selectEl, options, exclude = null) {
+      var currentSelection = selectEl.value;
+      selectEl.innerHTML = ""; // leegmaken
+      for (const opt of options) {
+          if (opt !== exclude) 
+          {
+              const el = document.createElement("option");
+              el.value = opt;
+              el.textContent = opt;
+              selectEl.appendChild(el);
+          }
+      }
+      if (currentSelection != exclude && currentSelection != null && currentSelection != "") {
+          selectEl.value=currentSelection;
+      }
+  }
+
+  function getBestFittingCircle(heights) {
+    var n = heights.length;
+    const points = Array.from({length:n},(_,i) => { return {x: i * spacing, y: heights[i]}; });
+    selectOptions = [];
+    const fit = fitCircle(points);
+    if (fit.ok) {
+      selectOptions.push('Best fit: ' + fit.R.toFixed(2));
+    }
+    else {
+      console.warn("Circle fit failed:", fit.reason);
+    }
+    
+    selectOptions.push('6');
+    selectOptions.push('7');
+    selectOptions.push('8');
+    selectOptions.push('9');
+    selectOptions.push('10');
+    selectOptions.push('11');
+    selectOptions.push('12');
+    selectOptions.push('13');
+    selectOptions.push('14');
+    selectOptions.push('15');
+    selectOptions.push('16');
+    selectOptions.push('17');
+    selectOptions.push('18');
+    selectOptions.push('19');
+    selectOptions.push('20');
+    selectOptions.push('21');
+    selectOptions.push('22');
+    selectOptions.push('23');
+    selectOptions.push('24');
+    selectOptions.push('25');
+    selectOptions.push('26');
+    selectOptions.push('27');
+    selectOptions.push('28');
+    selectOptions.push('29');
+    selectOptions.push('30');
+    fillSelect(selectArc, selectOptions);    
+    
+    return fit;
+  }
+
+  function doPlotArc(ctx, n, xCenter, yCenter, R, xMin, xMax, yMin, yMax) {  
+    ctx.strokeStyle=colorSmoothed;
+    const arcHeights = Array.from({length: n}, (_, i) => {
+      var x = i * spacing;
+      var dx = x - xCenter;
+      var dy = Math.sqrt(R * R - dx * dx);
+      var y = yCenter + dy;
+      return y;
+    });
+    const radii = Array(n).fill(R);
+    plotHeightsAndRadii(ctx,arcHeights,radii,colorArc, xMin, xMax, yMin, yMax, false);
+    return arcHeights;
+  }
+
+  function plotArc(ctx, heights, xMin, xMax, yMin, yMax) {  
+    selectedArc = (selectArc.value.startsWith('Best fit: ')) 
+        ? selectArc.value.substr(10)
+        : selectArc.value;
+
+    const radius = parseFloat(selectedArc);
+    const points = Array.from({length:heights.length},(_,i) => { return {x: i * spacing, y: heights[i]}; });
+    const fit = fitCircleFixedRadius(points, radius);
+    return doPlotArc(ctx, heights.length, fit.xc, fit.yc, radius, xMin, xMax, yMin, yMax);
+  }
+
+  function niceTicks(min,max,maxTicks){
+    if(!Number.isFinite(min)||!Number.isFinite(max)||min===max) return {ticks:[min],step:1};
+    if(min>max){const t=min;min=max;max=t;}
+    const range=max-min,raw=range/Math.max(1,maxTicks);
+    const mag=Math.pow(10,Math.floor(Math.log10(raw)));
+    const frac=raw/mag;
+    let step=(frac>=5)?10*mag:(frac>=2)?5*mag:(frac>=1)?2*mag:mag;
+    const tmin=Math.floor(min/step)*step;
+    const tmax=Math.ceil(max/step)*step;
+    const ticks=[];
+    for(let v=tmin;v<=tmax+1e-12;v+=step)ticks.push(v);
+    return{ticks,step};
+  }
   
-      const INF_THRESH_MM=1_000_000;
+  function drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax){
+    yMax += 0.0001; // allow some room at the top for the labels
+    const grid=getComputedStyle(document.documentElement).getPropertyValue('--grid')||'#1e2538';
+    const ink=getComputedStyle(document.documentElement).getPropertyValue('--ink')||'#e9eef5';
+    ctx.clearRect(0,0,W,H);
+    ctx.font='12px system-ui,sans-serif';
+    const plotW=W-(margin.l+margin.r), plotH=H-(margin.t+margin.b);
+    const sx=plotW/((xMax-xMin)||1), sy=plotH/((yMax-yMin)||1);
+    function X(x){return margin.l+(x-xMin)*sx;}
+    function Y(y){return H-margin.b-(y-yMin)*sy;}
+    const xt=niceTicks(xMin,xMax,6), yt=niceTicks(yMin,yMax,5);
+    ctx.strokeStyle=grid; ctx.lineWidth=1;
+    ctx.beginPath();
+    xt.ticks.forEach(v=>{const x=X(v);ctx.moveTo(x,margin.t);ctx.lineTo(x,H-margin.b);});
+    yt.ticks.forEach(v=>{const y=Y(v);ctx.moveTo(margin.l,y);ctx.lineTo(W-margin.r,y);});
+    ctx.stroke();
+    ctx.strokeStyle=grid; ctx.strokeRect(margin.l,margin.t,plotW,plotH);
+    ctx.fillStyle=ink; ctx.textAlign='center'; ctx.textBaseline='top';
+    xt.ticks.forEach(v=>ctx.fillText((v * 1000).toFixed(0),X(v),H-margin.b+4));
+    ctx.textAlign='right'; ctx.textBaseline='middle';
+    yt.ticks.forEach(v=>ctx.fillText((v * 1000).toFixed(1),margin.l-6,Y(v)));
+    return{X,Y};
+  }
+  
+  function strokeSmooth(ctx,heights,X,Y){
+    const n=heights.length;if(n===0)return;
+    x = 0;
+    ctx.beginPath();ctx.moveTo(X(x),Y(heights[0]));
+    for(let i=1;i<n;i++) {
+      x += spacing;
+      ctx.lineTo(X(x),Y(heights[i]));
+    }
+    ctx.stroke();
+  }
+  
+  function plotHeightsAndRadii(ctx,heights,radii,color,xMin,xMax,yMin,yMax,plotLabels=true){
+    const W=cY.width,H=cY.height,margin={l:56,t:18,r:14,b:44};
+    const ys=heights.map(p=>p);
+    const axes=drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax);
+    ctx.fillStyle=color;
+    x = 0;
+    heights.forEach(
+      p=>{
+          var px = axes.X(x);
+          var py = axes.Y(p);
+
+          ctx.beginPath();ctx.arc(px,py,2,0,Math.PI*2);ctx.fill();
+          x += spacing;
+      }
+    );
+    ctx.strokeStyle=color;ctx.lineWidth=1;strokeSmooth(ctx,heights,axes.X,axes.Y);
+
+    const INF_THRESH_MM=1_000_000;
+    ctx.fillStyle=colorLabels;ctx.font='12px system-ui,sans-serif';
+    ctx.textAlign='left';ctx.textBaseline='bottom';
+    xOffset = 10;
+    yOffset = -4;
+    x = 0;
+    for(let i=1;i<heights.length-1;i++){
+      x += spacing;
+      const R=radii[i];
+      let label;
+      if(!Number.isFinite(R) || Math.abs(R)>INF_THRESH_MM) label='∞';
+      else label=(-R).toFixed(2)+'m';
+
+      if (plotLabels) {
+          ctx.fillText(label,axes.X(x) + xOffset,axes.Y(heights[i]) + yOffset);
+      }
+    }
+  }
+
+  function getDifferenceColor(heightDifference) {
+    return Math.abs(heightDifference) >= 0.1 
+              ? '#ff0000'
+              : Math.abs(heightDifference) >= 0.05
+                  ? '#ff8000'
+                  : '#ffffff';
+  }
+
+  function plotPointsAndDifferenceLabels(ctx, axes, h1, h2, color1, color2) {
       ctx.fillStyle=colorLabels;ctx.font='12px system-ui,sans-serif';
       ctx.textAlign='left';ctx.textBaseline='bottom';
-      xOffset = 10;
-      yOffset = -4;
-      x = 0;
-      for(let i=1;i<heights.length-1;i++){
-        x += spacing;
-        const R=radii[i];
-        let label;
-        if(!Number.isFinite(R) || Math.abs(R)>INF_THRESH_MM) label='∞';
-        else label=(-R).toFixed(2)+'m';
+      ctx.strokeStyle = colorDifference;
 
-        if (plotLabels) {
-            ctx.fillText(label,axes.X(x) + xOffset,axes.Y(heights[i]) + yOffset);
-        }
+      const xOffset = 10;
+      const yOffset = -4;
+      var n = h1.length;
+      for (i = 0; i < n; i++) {
+          var x = axes.X(i * spacing);
+          var hh1 = h1[i];
+          var hh2 = h2[i];
+          var diff = (hh1 - hh2) * 1000;
+          var y1 = axes.Y(hh1);
+          var y2 = axes.Y(hh2);
+          var diffColor = getDifferenceColor(diff);
+          ctx.fillStyle=diffColor;
+          ctx.fillText((diff > 0 ? '+' : '') + diff.toFixed(2), x + xOffset, y1 + yOffset);
+      }
+
+      ctx.strokeStyle = '#ffffff';
+      ctx.setLineDash([1, 3]);
+      for (i = 0; i < n; i++) {
+          var x = axes.X(i * spacing);
+          var hh1 = h1[i];
+          var hh2 = h2[i];
+          var diff = (hh1 - hh2) * 1000;
+          var y1 = axes.Y(hh1);
+          var y2 = axes.Y(hh2);
+          ctx.beginPath();
+          ctx.moveTo(x, y1);
+          ctx.lineTo(x, y2);
+          ctx.stroke();
+
+          ctx.fillStyle = color1;
+          ctx.beginPath();
+          ctx.arc(x, y1, 2, 0, Math.PI*2);
+          ctx.fill();
+
+          ctx.fillStyle = color2;
+          ctx.beginPath();
+          ctx.arc(x, y2, 2, 0, Math.PI*2);
+          ctx.fill();
+      }
+      ctx.setLineDash([]);
+  }
+
+  function plotDiffs(ctx,actualHeights,smoothedHeights,arcHeights){
+    function plotHeights(selectEl) {
+      if (selectEl.value == optionMeasured) {
+          ctx.strokeStyle=colorMeasurements;
+          strokeSmooth(ctx,actualHeights,axes.X,axes.Y);
+          return { heights: actualHeights, label: 'M', color: colorMeasurements };
+      }
+      else if (selectEl.value == optionSmoothed) {
+          ctx.strokeStyle=colorSmoothed;
+          strokeSmooth(ctx,smoothedHeights,axes.X,axes.Y);
+          return { heights: smoothedHeights, label: 'S', color: colorSmoothed };
+      }
+      else {
+          ctx.strokeStyle=colorArc;
+          strokeSmooth(ctx,arcHeights,axes.X,axes.Y);
+          return { heights: arcHeights, label: 'C', color: colorArc };
       }
     }
 
-    function getDifferenceColor(heightDifference) {
-      return Math.abs(heightDifference) >= 0.1 
-                ? '#ff0000'
-                : Math.abs(heightDifference) >= 0.05
-                    ? '#ff8000'
-                    : '#ffffff';
-    }
+    const W=cY.width,H=cY.height,margin={l:56,t:18,r:14,b:44};
+    const ys=actualHeights;
+    const yt=smoothedHeights;
+    const xMin=0,xMax=actualHeights.length * spacing;
+    const ysMin=Math.min(...ys),ysMax=Math.max(...ys);
+    const ytMin=Math.min(...yt),ytMax=Math.max(...yt);
+    const yMin=Math.min(ysMin, ytMin), yMax=Math.max(ysMax, ytMax);
+    const axes=drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax);
+    
+    ctx.lineWidth=1;
+    
+    result1 = plotHeights(select1);
+    result2 = plotHeights(select2);
+    heights1 = result1.heights;
+    heights2 = result2.heights;
+    color1 = result1.color;
+    color2 = result2.color;
+    diffLabel = result1.label + ' - ' + result2.label;
+    plotPointsAndDifferenceLabels(ctx, axes, heights1, heights2, color1, color2);
+    return {
+      heights: Array.from({length:heights1.length},(_,i) => {
+          return heights1[i] - heights2[i];
+      }),
+      label: diffLabel
+    };
+  }
 
-    function plotPointsAndDifferenceLabels(ctx, axes, h1, h2, color1, color2) {
-        ctx.fillStyle=colorLabels;ctx.font='12px system-ui,sans-serif';
-        ctx.textAlign='left';ctx.textBaseline='bottom';
-        ctx.strokeStyle = colorDifference;
+  function run(){
+    msgEl.textContent='';
+    try{
+      spacing=Number(spacingEl.value) / 1000;
+      const heights=parseHeights(dataEl.value);
+      const xMin=0,xMax=heights.length * spacing;
+      const yMin=Math.min(...heights),yMax=Math.max(...heights);
+      
+      const radii=computeRadii(heights);
+      plotHeightsAndRadii(gY, heights, radii, colorMeasurements, xMin, xMax, yMin, yMax);
+      
+      const filtered = applySavitzkyGolayFilter(heights);
+      plotHeightsAndRadii(gSmooth, filtered.y,filtered.R, colorSmoothed, xMin, xMax, yMin, yMax);
 
-        const xOffset = 10;
-        const yOffset = -4;
-        var n = h1.length;
-        for (i = 0; i < n; i++) {
-            var x = axes.X(i * spacing);
-            var hh1 = h1[i];
-            var hh2 = h2[i];
-            var diff = (hh1 - hh2) * 1000;
-            var y1 = axes.Y(hh1);
-            var y2 = axes.Y(hh2);
-            var diffColor = getDifferenceColor(diff);
-            ctx.fillStyle=diffColor;
-            ctx.fillText((diff > 0 ? '+' : '') + diff.toFixed(2), x + xOffset, y1 + yOffset);
-        }
+      getBestFittingCircle(heights);
+      const arcHeights = plotArc(gArc, heights, xMin, xMax, yMin, yMax);
 
-        ctx.strokeStyle = '#ffffff';
-        for (i = 0; i < n; i++) {
-            var x = axes.X(i * spacing);
-            var hh1 = h1[i];
-            var hh2 = h2[i];
-            var diff = (hh1 - hh2) * 1000;
-            var y1 = axes.Y(hh1);
-            var y2 = axes.Y(hh2);
-            ctx.beginPath();
-            ctx.moveTo(x, y1);
-            ctx.lineTo(x, y2);
-            ctx.stroke();
+      const diffsResult = plotDiffs(gDiff, heights, filtered.y, arcHeights);
+      const diffs = diffsResult.heights;
+      const diffLabel = diffsResult.label;
+      document.getElementById('labelDiff').innerText = 'Difference (' + diffLabel + ')';
 
-            ctx.fillStyle = color1;
-            ctx.beginPath();
-            ctx.arc(x, y1, 2, 0, Math.PI*2);
-            ctx.fill();
+      summaryEl.innerHTML=heights.length+' points · Δ='+ spacingEl.value +' mm';
 
-            ctx.fillStyle = color2;
-            ctx.beginPath();
-            ctx.arc(x, y2, 2, 0, Math.PI*2);
-            ctx.fill();
-        }
-    }
+      textSmoothed = "";
+      taDiff.innerHTML = '';
+      textArc = "";
+      const n=heights.length;
+      for(let i=0; i<n; i++) {
+          if (i != 0) {
+              textSmoothed += '\n'; 
+              textDiff += '\n'; 
+              textArc += '\n';
+          }
 
-    function plotDiffs(ctx,actualHeights,smoothedHeights,bestFitArcHeights){
-      function plotHeights(selectEl) {
-        if (selectEl.value == optionMeasured) {
-            ctx.strokeStyle=colorMeasurements;
-            strokeSmooth(ctx,actualHeights,axes.X,axes.Y);
-            return { heights: actualHeights, label: 'M', color: colorMeasurements };
-        }
-        else if (selectEl.value == optionSmoothed) {
-            ctx.strokeStyle=colorSmoothed;
-            strokeSmooth(ctx,smoothedHeights,axes.X,axes.Y);
-            return { heights: smoothedHeights, label: 'S', color: colorSmoothed };
-        }
-        else {
-            ctx.strokeStyle=colorBestFittingCircle;
-            strokeSmooth(ctx,bestFitArcHeights,axes.X,axes.Y);
-            return { heights: bestFitArcHeights, label: 'B', color: colorBestFittingCircle };
-        }
+          height = heights[i] * 1000;
+          smoothedHeight = filtered.y[i] * 1000;
+          arcHeight = arcHeights[i] * 1000;
+          differenceHeight = diffs[i] * 1000;
+
+          textSmoothed += smoothedHeight.toFixed(2).toString();
+          textDiff = (differenceHeight > 0 ? '+' : '') + differenceHeight.toFixed(2).toString();
+          diffColor = getDifferenceColor(differenceHeight);
+          taDiff.innerHTML += '<span style="' + diffColor + '">' + textDiff + '</br></span>';
+          textArc += arcHeight.toFixed(2).toString();
       }
 
-      const W=cY.width,H=cY.height,margin={l:56,t:18,r:14,b:44};
-      const ys=actualHeights;
-      const yt=smoothedHeights;
-      const xMin=0,xMax=actualHeights.length * spacing;
-      const ysMin=Math.min(...ys),ysMax=Math.max(...ys);
-      const ytMin=Math.min(...yt),ytMax=Math.max(...yt);
-      const yMin=Math.min(ysMin, ytMin), yMax=Math.max(ysMax, ytMax);
-      const axes=drawAxes(ctx,W,H,margin,xMin,xMax,yMin,yMax);
-      
-      ctx.lineWidth=1;
-      
-      result1 = plotHeights(select1);
-      result2 = plotHeights(select2);
-      heights1 = result1.heights;
-      heights2 = result2.heights;
-      color1 = result1.color;
-      color2 = result2.color;
-      diffLabel = result1.label + ' - ' + result2.label;
-      plotPointsAndDifferenceLabels(ctx, axes, heights1, heights2, color1, color2);
-      return {
-        heights: Array.from({length:heights1.length},(_,i) => {
-            return heights1[i] - heights2[i];
-        }),
-        label: diffLabel
-      };
-    }
+      taSmoothed.value = textSmoothed;
+      taArc.value = textArc;
+    }catch(err){msgEl.textContent=err.message||String(err);}
+  }
 
-    function run(){
-      msgEl.textContent='';
-      try{
-        spacing=Number(spacingEl.value) / 1000;
-        const heights=parseHeights(dataEl.value);
-        
-        const radii=computeRadii(heights);
-        plotHeightsAndRadii(gY, heights, radii, colorMeasurements);
-        
-        const filtered = applySavitzkyGolayFilter(heights);
-        plotHeightsAndRadii(gSmooth, filtered.y,filtered.R, colorSmoothed);
-
-        const bestFitArcHeights = plotBestFitCirlce(gArc, heights);
-
-        const diffsResult = plotDiffs(gDiff, heights, filtered.y, bestFitArcHeights);
-        const diffs = diffsResult.heights;
-        const diffLabel = diffsResult.label;
-        document.getElementById('labelDiff').innerText = 'Difference (' + diffLabel + ')';
-
-        summaryEl.innerHTML=heights.length+' points · Δ='+ spacingEl.value +' mm';
-
-        textSmoothed = "";
-        taDiff.innerHTML = '';
-        textBestFittingCircle = "";
-        const n=heights.length;
-        for(let i=0; i<n; i++) {
-            if (i != 0) {
-               textSmoothed += '\n'; 
-               textDiff += '\n'; 
-               textBestFittingCircle += '\n';
-            }
-
-            height = heights[i] * 1000;
-            smoothedHeight = filtered.y[i] * 1000;
-            bestFitArcHeight = bestFitArcHeights[i] * 1000;
-            differenceHeight = diffs[i] * 1000;
-
-            textSmoothed += smoothedHeight.toFixed(2).toString();
-            textDiff = (differenceHeight > 0 ? '+' : '') + differenceHeight.toFixed(2).toString();
-            diffColor = getDifferenceColor(differenceHeight);
-            taDiff.innerHTML += '<span style="' + diffColor + '">' + textDiff + '</br></span>';
-            textBestFittingCircle += bestFitArcHeight.toFixed(2).toString();
-        }
-
-        taSmoothed.value = textSmoothed;
-        taBestFittingCircle.value = textBestFittingCircle;
-      }catch(err){msgEl.textContent=err.message||String(err);}
-    }
-  
-    runBtn.addEventListener('click',run);
-    demoBtn.addEventListener('click',()=>{
-      spacingEl.value=20;msgEl.textContent='';
-      dataEl.value=[
+  runBtn.addEventListener('click',run);
+  demoBtn.addEventListener('click',()=>{
+    spacingEl.value=20;msgEl.textContent='';
+    dataEl.value=[
 '15.85',
 '16.40',
 '16.85',
@@ -1001,45 +1167,32 @@ function plotBestFitCirlce(ctx, heights) {
 '16.85',
 '16.25',
 '15.65'
-      ].join('\n');
-    });
+    ].join('\n');
+  });
 
-    // Hulpfunctie: vul een selectelement met opties
-    function fillSelect(selectEl, exclude = null) {
-        var currentSelection = selectEl.value;
-        selectEl.innerHTML = ""; // leegmaken
-        for (const opt of options) {
-            if (opt !== exclude) 
-            {
-                const el = document.createElement("option");
-                el.value = opt;
-                el.textContent = opt;
-                selectEl.appendChild(el);
-            }
-        }
-        if (currentSelection != exclude && currentSelection != null && currentSelection != "") {
-            selectEl.value=currentSelection;
-        }
-    }
 
-    // initialiseren
-    fillSelect(select1);
-    fillSelect(select2, select1.value);
+  // initialiseren
+  fillSelect(select1, options);
+  fillSelect(select2, options, select1.value);
 
-    // update tweede select als de eerste verandert
-    select1.addEventListener("change", () => {
-        const selected = select1.value;
-        fillSelect(select2, selected);
-        run();
-    });
+  // update tweede select als de eerste verandert
+  select1.addEventListener("change", () => {
+    const selected = select1.value;
+    fillSelect(select2, options, selected);
+    run();
+  });
 
-    select2.addEventListener("change", () => {
-        const selected = select2.value;
-        fillSelect(select1, null);
-        run();
-    });
+  select2.addEventListener("change", () => {
+    const selected = select2.value;
+    fillSelect(select1, options, null);
+    run();
+  });
 
-  </script>
-  </body>
-  </html>
-  
+  selectArc.addEventListener("change", () => {
+    //const selected = selectArc.value;
+    run();
+  });
+
+</script>
+</body>
+</html>
